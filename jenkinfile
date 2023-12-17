@@ -1,0 +1,97 @@
+pipeline {
+    agent any
+    tools {
+        jdk 'jdk17'
+        nodejs 'node16'
+    }
+    environment {
+        SCANNER_HOME = tool 'sonar-scanner'
+    }
+    stages {
+        stage('clean workspace') {
+            steps {
+                cleanWs()
+            }
+        }
+        stage('Checkout from Git') {
+            steps {
+                git branch: 'main', url: 'https://github.com/maldhan1/myotube-clone-app.git'
+            }
+        }
+        stage("Sonarqube Analysis") {
+            steps {
+                withSonarQubeEnv('SonarQube-Server') {
+                    sh '''$SCANNER_HOME/bin/sonar-scanner -Dsonar.projectName=Youtube-CICD \
+                    -Dsonar.projectKey=Youtube-CICD'''
+                }
+            }
+        }
+        stage("Quality Gate") {
+            steps {
+                script {
+                    waitForQualityGate abortPipeline: false, credentialsId: 'SonarQube-Token'
+                }
+            }
+        }
+        stage('Install Dependencies') {
+            steps {
+                sh "npm install"
+            }
+        }
+        stage('TRIVY FS SCAN') {
+             steps {
+                 sh "trivy fs . > trivyfs.txt"
+             }
+         }
+         stage("Docker Build & Push"){
+             steps{
+                 script{
+                   withDockerRegistry(credentialsId: 'dockerhub', toolName: 'docker'){   
+                      sh "docker build -t youtube-clone ."
+                      sh "docker tag youtube-clone ashfaque9x/youtube-clone:latest "
+                      sh "docker push ashfaque9x/youtube-clone:latest "
+                    }
+                }
+            }
+        }
+        stage("TRIVY Image Scan"){
+            steps{
+                sh "trivy image ashfaque9x/youtube-clone:latest > trivyimage.txt" 
+            }
+        }
+        stage('Deploy to Kubernets'){
+            steps{
+                script{
+                    dir('Kubernetes') {
+                      withKubeConfig(caCertificate: '', clusterName: '', contextName: '', credentialsId: 'kubernetes', namespace: '', restrictKubeConfigAccess: false, serverUrl: '') {
+                      sh 'kubectl delete --all pods'
+                      sh 'kubectl apply -f deployment.yml'
+                      sh 'kubectl apply -f service.yml'
+                      }   
+                    }
+                }
+            }
+        }
+    }
+    post {
+     always {
+        emailext attachLog: true,
+            subject: "'${currentBuild.result}'",
+            body: "Project: ${env.JOB_NAME}<br/>" +
+                "Build Number: ${env.BUILD_NUMBER}<br/>" +
+                "URL: ${env.BUILD_URL}<br/>",
+            to: 'ashfaque.s510@gmail.com',                              
+            attachmentsPattern: 'trivyfs.txt,trivyimage.txt'
+        }
+    }
+}
+
+=============================================================================================================================================================================================
+[G] Cleanup
+$ kubectl delete --all pods -n prometheus                   //This command will delete all the pods in prometheus namespace
+$ kubectl delete namespace prometheus
+$ kubectl get all                                           //This command will show the all the deployments, pods & services in default namespace
+$ kubectl delete deployment.apps/virtualtechbox-cluster     //delete deployment in your k8s cluster
+$ kubectl delete service/virtualtechbox-service             //delete service for your deployment of k8s cluster
+$ eksctl delete cluster virtualtechbox-cluster --region ap-south-1     OR    eksctl delete cluster --region=ap-south-1 --name=virtualtechbox-cluster      //This command will delete your EKS cluster
+$ terraform destroy
